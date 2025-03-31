@@ -1,0 +1,1 @@
+# eks-monitoring-logging-platform
