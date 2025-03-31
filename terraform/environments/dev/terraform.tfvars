@@ -1,0 +1,12 @@
+region             = "ap-northeast-1"
+environment        = "dev"
+project            = "eks-platform"
+owner              = "platform-team"
+vpc_cidr           = "10.0.0.0/16"
+availability_zones = ["ap-northeast-1a", "ap-northeast-1c"]
+cluster_name       = "monitoring-logging-platform"
+kubernetes_version = "1.29"
+node_instance_types = ["t3.medium"]
+desired_nodes      = 2
+min_nodes          = 1
+max_nodes          = 3
