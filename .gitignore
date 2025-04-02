@@ -1,0 +1,55 @@
+# Terraform files
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfstate.*.backup
+*.tfvars
+!example.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+crash.log
+crash.*.log
+
+# Terraform plan output
+plan.txt
+tfplan
+
+# Local Kubernetes environment
+kubeconfig*
+
+# Secrets
+*.pem
+*.key
+*.cert
+*.password
+*secret*
+secrets.yml
+secrets.yaml
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+dist/
+build/
+*.zip
+*.tar.gz
+
+# Node.js / npm (if used for documentation or tooling)
+node_modules/
+package-lock.json
+npm-debug.log

@@ -1,0 +1,303 @@
+name: EKS Monitoring Platform CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  AWS_REGION: ap-northeast-1  # 東京リージョン
+  TERRAFORM_VERSION: 1.4.6
+  KUBECTL_VERSION: 1.26.0
+  EKS_CLUSTER_NAME: eks-monitoring-${{ github.event.inputs.environment || 'dev' }}
+
+jobs:
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Format
+        working-directory: ./terraform
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        working-directory: ./terraform
+        run: terraform validate
+
+      - name: Lint Kubernetes Manifests
+        uses: azure/k8s-lint@v1
+        with:
+          manifests: |
+            kubernetes/prometheus
+            kubernetes/grafana
+            kubernetes/elasticsearch
+            kubernetes/fluentbit
+            kubernetes/kibana
+            kubernetes/alertmanager
+            kubernetes/sample-app
+
+  plan:
+    name: Terraform Plan
+    needs: validate
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: ./terraform
+        run: terraform plan -var="environment=${{ github.event.inputs.environment || 'dev' }}" -out=tfplan
+        
+      - name: Save Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan
+          path: ./terraform/tfplan
+
+      - name: Add Plan to PR
+        if: github.event_name == 'pull_request'
+        run: |
+          terraform -chdir=./terraform show -no-color tfplan > plan.txt
+          echo "<details><summary>Terraform Plan</summary>" > plan_comment.txt
+          echo "" >> plan_comment.txt
+          echo '```terraform' >> plan_comment.txt
+          cat plan.txt >> plan_comment.txt
+          echo '```' >> plan_comment.txt
+          echo "</details>" >> plan_comment.txt
+          gh pr comment ${{ github.event.pull_request.number }} -F plan_comment.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  apply:
+    name: Terraform Apply
+    needs: plan
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: ./terraform
+        run: terraform apply -var="environment=${{ github.event.inputs.environment || 'dev' }}" -auto-approve
+
+      - name: Save Terraform Outputs
+        working-directory: ./terraform
+        run: terraform output -json > ../terraform_outputs.json
+
+  deploy_monitoring:
+    name: Deploy Monitoring Stack
+    needs: apply
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Deploy Prometheus Operator
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+            -f kubernetes/prometheus/values.yaml \
+            --namespace monitoring --create-namespace
+
+      - name: Deploy Elasticsearch & Kibana
+        run: |
+          helm repo add elastic https://helm.elastic.co
+          helm repo update
+          helm upgrade --install elasticsearch elastic/elasticsearch \
+            -f kubernetes/elasticsearch/values.yaml \
+            --namespace logging --create-namespace
+          helm upgrade --install kibana elastic/kibana \
+            -f kubernetes/kibana/values.yaml \
+            --namespace logging
+
+      - name: Deploy Fluent Bit
+        run: |
+          helm repo add fluent https://fluent.github.io/helm-charts
+          helm repo update
+          helm upgrade --install fluent-bit fluent/fluent-bit \
+            -f kubernetes/fluentbit/values.yaml \
+            --namespace logging
+
+      - name: Deploy Sample Application
+        run: |
+          kubectl apply -f kubernetes/sample-app/deployment.yaml
+          kubectl apply -f kubernetes/sample-app/service.yaml
+          kubectl apply -f kubernetes/sample-app/servicemonitor.yaml
+
+  verify:
+    name: Verify Deployment
+    needs: deploy_monitoring
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Verify Monitoring Stack
+        run: |
+          echo "Verifying Prometheus..."
+          kubectl -n monitoring get pods | grep prometheus
+          
+          echo "Verifying Grafana..."
+          kubectl -n monitoring get pods | grep grafana
+          
+          echo "Verifying Elasticsearch..."
+          kubectl -n logging get pods | grep elasticsearch
+          
+          echo "Verifying Kibana..."
+          kubectl -n logging get pods | grep kibana
+          
+          echo "Verifying Fluent Bit..."
+          kubectl -n logging get pods | grep fluent-bit
+          
+          echo "Verifying Sample Application..."
+          kubectl get pods | grep sample-app
+
+      - name: Check Services and Endpoints
+        run: |
+          echo "Checking Prometheus service..."
+          kubectl -n monitoring get svc | grep prometheus
+          
+          echo "Checking Grafana service..."
+          kubectl -n monitoring get svc | grep grafana
+          
+          echo "Checking Elasticsearch service..."
+          kubectl -n logging get svc | grep elasticsearch
+          
+          echo "Checking Kibana service..."
+          kubectl -n logging get svc | grep kibana
+          
+          echo "Checking Sample App service..."
+          kubectl get svc | grep sample-app
+          
+      - name: Create Deployment Report
+        run: |
+          echo "# Deployment Report" > deployment_report.md
+          echo "## Environment: ${{ github.event.inputs.environment || 'dev' }}" >> deployment_report.md
+          echo "## Timestamp: $(date)" >> deployment_report.md
+          echo "## Components Deployed:" >> deployment_report.md
+          echo "- Prometheus" >> deployment_report.md
+          echo "- Grafana" >> deployment_report.md
+          echo "- Elasticsearch" >> deployment_report.md
+          echo "- Kibana" >> deployment_report.md
+          echo "- Fluent Bit" >> deployment_report.md
+          echo "- Sample Application" >> deployment_report.md
+          
+          echo "## Pod Status:" >> deployment_report.md
+          echo '```' >> deployment_report.md
+          kubectl get pods -A | grep -E 'monitoring|logging|sample-app' >> deployment_report.md
+          echo '```' >> deployment_report.md
+          
+          echo "## Service Status:" >> deployment_report.md
+          echo '```' >> deployment_report.md
+          kubectl get svc -A | grep -E 'monitoring|logging|sample-app' >> deployment_report.md
+          echo '```' >> deployment_report.md
+          
+      - name: Upload Deployment Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-report
+          path: deployment_report.md

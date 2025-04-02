@@ -1,0 +1,53 @@
+replicas: 3
+minimumMasterNodes: 2
+
+image: docker.elastic.co/elasticsearch/elasticsearch
+imageTag: 8.7.0
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+
+volumeClaimTemplate:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 30Gi
+  storageClassName: gp2
+
+antiAffinity: "soft"
+
+esJavaOpts: "-Xmx1g -Xms1g"
+
+service:
+  type: ClusterIP
+
+httpPort: 9200
+transportPort: 9300
+
+sysctlInitContainer:
+  enabled: true
+
+extraEnvs:
+  - name: discovery.type
+    value: single-node
+
+esConfig:
+  elasticsearch.yml: |
+    xpack.security.enabled: true
+    xpack.security.transport.ssl.enabled: true
+    xpack.monitoring.enabled: true
+    xpack.monitoring.collection.enabled: true
+
+securityContext:
+  fsGroup: 1000
+  runAsUser: 1000
+
+secretMounts:
+  - name: elasticsearch-certificates
+    secretName: elasticsearch-certificates
+    path: /usr/share/elasticsearch/config/certs

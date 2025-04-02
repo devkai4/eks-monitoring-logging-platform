@@ -17,7 +17,7 @@ The platform is designed as a portfolio project to demonstrate cloud engineering
 
 ## Architecture
 
-![EKS Monitoring and Logging Platform Architecture](./docs/architecture-diagram.png)
+![EKS Monitoring and Logging Platform Architecture](./docs/images/architecture-overview.png)
 
 The architecture consists of the following components:
 
@@ -32,123 +32,164 @@ The architecture consists of the following components:
 
 - AWS Account with appropriate permissions
 - AWS CLI configured with access credentials
-- Terraform (v1.0.0+)
-- kubectl
+- Terraform (v1.4.6+)
+- kubectl (v1.26.0+)
 - Helm (v3.0.0+)
 - Git
 
 ## Setup and Deployment
 
-The platform can be deployed in phases following these steps:
+The platform can be deployed through either the automatic CI/CD pipeline or manually through these steps:
 
-### 1. EKS Cluster Setup
+### Automated Deployment (Recommended)
+
+1. Fork this repository
+2. Set up the required GitHub Actions secrets:
+   - `AWS_ROLE_TO_ASSUME`: ARN of the IAM role with necessary permissions
+3. Trigger the workflow manually through GitHub Actions for your desired environment (dev/staging/prod)
+
+### Manual Deployment
+
+#### 1. Infrastructure Deployment
 
 ```bash
 cd terraform
 terraform init
-terraform apply
+terraform plan -var="environment=dev"
+terraform apply -var="environment=dev"
 ```
 
 This will provision:
 - Custom VPC with public and private subnets
-- EKS cluster with managed node group (t3.medium instances)
+- EKS cluster with managed node groups
 - Required IAM roles and security groups
+- KMS encryption for secrets
 
-### 2. Monitoring Stack Deployment
+#### 2. Monitoring & Logging Stack Deployment
+
+Use the provided installation script:
+```bash
+# Makes the script executable
+chmod +x scripts/install.sh
+# Installs the complete monitoring and logging stack
+./scripts/install.sh dev
+```
+
+Or deploy individual components:
 
 ```bash
-cd kubernetes/prometheus-grafana
-kubectl create namespace monitoring
+# Update your kubeconfig
+aws eks update-kubeconfig --name eks-monitoring-dev --region ap-northeast-1
+
+# Deploy Prometheus Stack
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm install prometheus prometheus-community/kube-prometheus-stack -f values.yaml -n monitoring
+helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+  -f kubernetes/prometheus/values.yaml \
+  --namespace monitoring --create-namespace
+
+# Deploy Elasticsearch & Kibana
+helm repo add elastic https://helm.elastic.co
+helm upgrade --install elasticsearch elastic/elasticsearch \
+  -f kubernetes/elasticsearch/values.yaml \
+  --namespace logging --create-namespace
+helm upgrade --install kibana elastic/kibana \
+  -f kubernetes/kibana/values.yaml \
+  --namespace logging
+
+# Deploy Fluent Bit
+helm repo add fluent https://fluent.github.io/helm-charts
+helm upgrade --install fluent-bit fluent/fluent-bit \
+  -f kubernetes/fluentbit/values.yaml \
+  --namespace logging
+
+# Deploy Sample Application
+kubectl apply -f kubernetes/sample-app/deployment.yaml
+kubectl apply -f kubernetes/sample-app/service.yaml
+kubectl apply -f kubernetes/sample-app/servicemonitor.yaml
 ```
-
-This installs:
-- Prometheus server with persistent storage
-- Grafana with preconfigured dashboards
-- Alertmanager
-- Node Exporter and kube-state-metrics
-
-### 3. Logging Stack Deployment
-
-```bash
-cd kubernetes/efk-stack
-kubectl apply -f elastic-operator.yaml
-kubectl apply -f elasticsearch.yaml
-kubectl apply -f kibana.yaml
-kubectl apply -f fluent-bit.yaml
-```
-
-This sets up:
-- Elasticsearch cluster with 3 nodes
-- Kibana instance for log visualization
-- Fluent Bit DaemonSet for log collection
-
-### 4. Alert Configuration
-
-```bash
-cd kubernetes/alerting
-kubectl apply -f alertmanager-config.yaml
-kubectl apply -f prometheus-rules.yaml
-```
-
-This establishes:
-- Alert rules for critical system metrics
-- Notification channels (Slack and Email)
-- Alert grouping and routing policies
-
-### 5. Sample Application Deployment
-
-```bash
-cd kubernetes/sample-app
-kubectl apply -f namespace.yaml
-kubectl apply -f deployment.yaml
-kubectl apply -f service.yaml
-kubectl apply -f service-monitor.yaml
-```
-
-This deploys:
-- Sample microservices with Prometheus instrumentation
-- Service monitors for custom metrics collection
-- Structured logging setup
 
 ## Customization
 
 The platform is designed to be customizable:
 
-- **Terraform Variables**: Edit `terraform.tfvars` to change infrastructure parameters
-- **Helm Values**: Modify `values.yaml` to adjust Prometheus/Grafana settings
-- **Elasticsearch Config**: Tune `elasticsearch.yaml` for different storage or performance requirements
-- **Alert Rules**: Edit `prometheus-rules.yaml` to customize alerting thresholds
+- **Terraform Variables**: Edit variables in the Terraform configuration to change infrastructure parameters
+- **Helm Values**: Modify the various `values.yaml` files to adjust component settings
+  - `kubernetes/prometheus/values.yaml`: Prometheus and Grafana settings
+  - `kubernetes/elasticsearch/values.yaml`: Elasticsearch configuration
+  - `kubernetes/kibana/values.yaml`: Kibana settings
+  - `kubernetes/fluentbit/values.yaml`: Log collection configuration
+  - `kubernetes/alertmanager/values.yaml`: Alert routing configuration
+- **CI/CD Pipeline**: Adjust workflow in `.github/workflows/main.yml`
 
-## Dashboards
+## Features
 
-The platform comes with several pre-configured Grafana dashboards:
+### Monitoring
 
-1. **Cluster Overview**: High-level view of Kubernetes cluster health
-2. **Node Resources**: Detailed node-level metrics (CPU, memory, disk, network)
-3. **Pod Resources**: Container-level resource utilization
-4. **Capacity Planning**: Trend analysis and resource forecasting
-5. **Sample Application**: Custom business and technical metrics
+- **Real-time metrics collection** from Kubernetes nodes, pods, and applications
+- **Pre-configured dashboards** for cluster, node, and pod monitoring
+- **Alerting system** for critical issues and performance anomalies
+- **ServiceMonitor** support for automatic discovery of custom metrics endpoints
+- **Persistent storage** for long-term metric retention
+
+### Logging
+
+- **Centralized logging** from all containers and system components
+- **Structured log parsing** with Fluent Bit
+- **Full-text search** capabilities through Elasticsearch
+- **Log visualization** with Kibana dashboards
+- **Log retention policies** for compliance and space management
+
+### CI/CD Pipeline
+
+- **Multi-environment support** (dev, staging, prod)
+- **Infrastructure validation** with Terraform lint and validate
+- **Kubernetes manifest validation** with kubeval
+- **Automatic deployment** of Terraform and Kubernetes resources
+- **Deployment verification** with health checks
+- **Deployment reports** for visibility and troubleshooting
+
+## Accessing the Platform
+
+After deployment, access the components with the following commands:
+
+```bash
+# Grafana (monitoring dashboard)
+kubectl port-forward svc/prometheus-grafana 3000:80 -n monitoring
+# Open http://localhost:3000 (user: admin, password: admin)
+
+# Prometheus (metrics)
+kubectl port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 -n monitoring
+# Open http://localhost:9090
+
+# Kibana (logs)
+kubectl port-forward svc/kibana-kibana 5601:5601 -n logging
+# Open http://localhost:5601 (user: elastic, password: displayed after install)
+
+# Elasticsearch (log storage)
+kubectl port-forward svc/elasticsearch-master 9200:9200 -n logging
+# Access via http://localhost:9200
+```
 
 ## Troubleshooting
 
-### Common Issues
+A comprehensive troubleshooting guide is available at [docs/troubleshooting.md](docs/troubleshooting.md). Common issues include:
 
-**EKS Cluster Provisioning Failures**
-- Check IAM permissions
-- Verify VPC and subnet configurations
-- Ensure proper CIDR block assignments
+- **EKS Cluster Provisioning Failures**
+  - Check IAM permissions and VPC configurations
+  - Verify AWS CLI configuration and access
 
-**Prometheus Connection Issues**
-- Verify service and pod are running: `kubectl get pods -n monitoring`
-- Check service monitor configuration
-- Examine Prometheus logs: `kubectl logs -f prometheus-prometheus-kube-prometheus-prometheus-0 -n monitoring`
+- **Monitoring Stack Issues**
+  - Prometheus pods not starting or scraping issues
+  - Grafana data source configuration problems
 
-**Elasticsearch Data Persistence**
-- Verify storage class and PVC status: `kubectl get pvc -n logging`
-- Check Elasticsearch pods status: `kubectl get pods -n logging`
-- Inspect Elasticsearch logs: `kubectl logs -f elasticsearch-master-0 -n logging`
+- **Logging Stack Issues**
+  - Elasticsearch cluster health problems
+  - Fluent Bit to Elasticsearch connectivity issues
+
+## Documentation
+
+- [Architecture Documentation](docs/architecture.md): Detailed system design
+- [Troubleshooting Guide](docs/troubleshooting.md): Solutions for common issues
 
 ## Future Enhancements
 
@@ -165,6 +206,7 @@ The platform comes with several pre-configured Grafana dashboards:
 - [Elastic Cloud on Kubernetes](https://www.elastic.co/guide/en/cloud-on-k8s/current/index.html)
 - [AWS EKS Best Practices](https://aws.github.io/aws-eks-best-practices/)
 - [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+- [GitHub Actions Documentation](https://docs.github.com/en/actions)
 
 ## License
 
