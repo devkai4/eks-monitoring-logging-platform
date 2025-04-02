@@ -1,0 +1,85 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: critical-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+    severity: critical
+spec:
+  groups:
+  - name: node.rules
+    rules:
+    - alert: NodeCPUUsageCritical
+      expr: instance:node_cpu_utilisation:avg1m * 100 > 90
+      for: 10m
+      labels:
+        severity: critical
+        team: infrastructure
+      annotations:
+        summary: "Node CPU usage exceeds 90%"
+        description: "CPU usage on node {{ $labels.instance }} has exceeded 90% for more than 10 minutes. Current value: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/node-cpu"
+        dashboard_url: "https://grafana.example.com/d/monitoring/node-resources?var-instance={{ $labels.instance }}"
+
+    - alert: NodeMemoryUsageCritical
+      expr: instance:node_memory_utilisation:percent * 100 > 90
+      for: 10m
+      labels:
+        severity: critical
+        team: infrastructure
+      annotations:
+        summary: "Node memory usage exceeds 90%"
+        description: "Memory usage on node {{ $labels.instance }} has exceeded 90% for more than 10 minutes. Current value: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/node-memory"
+        dashboard_url: "https://grafana.example.com/d/monitoring/node-resources?var-instance={{ $labels.instance }}"
+
+    - alert: NodeDiskUsageCritical
+      expr: node_filesystem_avail_bytes / node_filesystem_size_bytes * 100 < 5 and ON (instance, device, mountpoint) node_filesystem_readonly == 0
+      for: 5m
+      labels:
+        severity: critical
+        team: infrastructure
+      annotations:
+        summary: "Node disk usage exceeds 95%"
+        description: "Disk usage on node {{ $labels.instance }} mountpoint {{ $labels.mountpoint }} has exceeded 95% for more than 5 minutes. Current free space: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/node-disk"
+        dashboard_url: "https://grafana.example.com/d/monitoring/node-resources?var-instance={{ $labels.instance }}"
+
+  - name: kubernetes.rules
+    rules:
+    - alert: KubernetesPodCrashLoopBackOff
+      expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 5 > 5
+      for: 5m
+      labels:
+        severity: critical
+        team: platform
+      annotations:
+        summary: "Pod is crash looping"
+        description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has restarted {{ $value | printf \"%.2f\" }} times in the last 15 minutes."
+        runbook_url: "https://example.com/runbooks/pod-crashloop"
+        dashboard_url: "https://grafana.example.com/d/monitoring/pod-resources?var-namespace={{ $labels.namespace }}&var-pod={{ $labels.pod }}"
+
+    - alert: KubernetesAPIServerLatency
+      expr: histogram_quantile(0.99, sum(rate(apiserver_request_duration_seconds_bucket{verb!="WATCH"}[5m])) by (resource, verb, le)) > 2
+      for: 10m
+      labels:
+        severity: critical
+        team: platform
+      annotations:
+        summary: "API server latency is high"
+        description: "99th percentile latency for {{ $labels.verb }} requests to {{ $labels.resource }} is higher than 2 seconds for more than 10 minutes. Current value: {{ $value | printf \"%.2f\" }}s"
+        runbook_url: "https://example.com/runbooks/apiserver-latency"
+        dashboard_url: "https://grafana.example.com/d/monitoring/kubernetes-apiserver"
+
+    - alert: KubernetesAPIServerErrors
+      expr: sum(rate(apiserver_request_total{code=~"5.."}[5m])) / sum(rate(apiserver_request_total[5m])) * 100 > 5
+      for: 5m
+      labels:
+        severity: critical
+        team: platform
+      annotations:
+        summary: "API server error rate is high"
+        description: "API server error rate is higher than 5% for more than 5 minutes. Current value: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/apiserver-errors"
+        dashboard_url: "https://grafana.example.com/d/monitoring/kubernetes-apiserver"

@@ -1,0 +1,97 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: warning-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+    severity: warning
+spec:
+  groups:
+  - name: node.rules
+    rules:
+    - alert: NodeCPUUsageWarning
+      expr: instance:node_cpu_utilisation:avg1m * 100 > 80
+      for: 10m
+      labels:
+        severity: warning
+        team: infrastructure
+      annotations:
+        summary: "Node CPU usage exceeds 80%"
+        description: "CPU usage on node {{ $labels.instance }} has exceeded 80% for more than 10 minutes. Current value: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/node-cpu"
+        dashboard_url: "https://grafana.example.com/d/monitoring/node-resources?var-instance={{ $labels.instance }}"
+
+    - alert: NodeMemoryUsageWarning
+      expr: instance:node_memory_utilisation:percent * 100 > 80
+      for: 10m
+      labels:
+        severity: warning
+        team: infrastructure
+      annotations:
+        summary: "Node memory usage exceeds 80%"
+        description: "Memory usage on node {{ $labels.instance }} has exceeded 80% for more than 10 minutes. Current value: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/node-memory"
+        dashboard_url: "https://grafana.example.com/d/monitoring/node-resources?var-instance={{ $labels.instance }}"
+
+    - alert: NodeDiskUsageWarning
+      expr: node_filesystem_avail_bytes / node_filesystem_size_bytes * 100 < 15 and ON (instance, device, mountpoint) node_filesystem_readonly == 0
+      for: 10m
+      labels:
+        severity: warning
+        team: infrastructure
+      annotations:
+        summary: "Node disk usage exceeds 85%"
+        description: "Disk usage on node {{ $labels.instance }} mountpoint {{ $labels.mountpoint }} has exceeded 85% for more than 10 minutes. Current free space: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/node-disk"
+        dashboard_url: "https://grafana.example.com/d/monitoring/node-resources?var-instance={{ $labels.instance }}"
+
+  - name: kubernetes.rules
+    rules:
+    - alert: KubernetesPodRestarts
+      expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 5 > 2
+      for: 10m
+      labels:
+        severity: warning
+        team: platform
+      annotations:
+        summary: "Pod is restarting frequently"
+        description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has restarted {{ $value | printf \"%.2f\" }} times in the last 15 minutes."
+        runbook_url: "https://example.com/runbooks/pod-restarts"
+        dashboard_url: "https://grafana.example.com/d/monitoring/pod-resources?var-namespace={{ $labels.namespace }}&var-pod={{ $labels.pod }}"
+
+    - alert: KubernetesPodNotReady
+      expr: sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown"}) > 0
+      for: 10m
+      labels:
+        severity: warning
+        team: platform
+      annotations:
+        summary: "Pod has been in non-ready state"
+        description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been in {{ $labels.phase }} phase for more than 10 minutes."
+        runbook_url: "https://example.com/runbooks/pod-not-ready"
+        dashboard_url: "https://grafana.example.com/d/monitoring/pod-resources?var-namespace={{ $labels.namespace }}&var-pod={{ $labels.pod }}"
+
+    - alert: KubernetesPersistentVolumeUtilizationWarning
+      expr: kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes * 100 < 15
+      for: 10m
+      labels:
+        severity: warning
+        team: storage
+      annotations:
+        summary: "PersistentVolume usage exceeds 85%"
+        description: "PersistentVolume {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} has only {{ $value | printf \"%.2f\" }}% space available."
+        runbook_url: "https://example.com/runbooks/pv-utilization"
+        dashboard_url: "https://grafana.example.com/d/monitoring/storage?var-namespace={{ $labels.namespace }}&var-pvc={{ $labels.persistentvolumeclaim }}"
+
+    - alert: KubernetesAPIRateLimit
+      expr: sum(rate(apiserver_request_total{code=~"429"}[5m])) / sum(rate(apiserver_request_total[5m])) * 100 > 1
+      for: 10m
+      labels:
+        severity: warning
+        team: platform
+      annotations:
+        summary: "API server rate limiting threshold exceeded"
+        description: "API server rate limiting threshold exceeded for more than 10 minutes. Current value: {{ $value | printf \"%.2f\" }}%"
+        runbook_url: "https://example.com/runbooks/api-rate-limit"
+        dashboard_url: "https://grafana.example.com/d/monitoring/kubernetes-apiserver"

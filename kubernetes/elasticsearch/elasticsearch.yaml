@@ -1,0 +1,118 @@
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: elasticsearch
+  namespace: logging
+spec:
+  version: 8.7.0
+  nodeSets:
+  - name: default
+    count: 3
+    config:
+      node.store.allow_mmap: false
+      node.roles: ["master", "data", "ingest"]
+      xpack.security.authc:
+        anonymous:
+          username: anonymous
+          roles: superuser
+          authz_exception: true
+      xpack.monitoring.collection.enabled: true
+      # 7日間のログ保持設定
+      action.destructive_requires_name: false
+    podTemplate:
+      spec:
+        containers:
+        - name: elasticsearch
+          env:
+          - name: ES_JAVA_OPTS
+            value: "-Xms1g -Xmx1g"
+          resources:
+            requests:
+              memory: 2Gi
+              cpu: 500m
+            limits:
+              memory: 2Gi
+              cpu: 1
+    volumeClaimTemplates:
+    - metadata:
+        name: elasticsearch-data
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 30Gi
+        storageClassName: gp2
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-index-lifecycle
+  namespace: logging
+data:
+  create-ilm-policy.sh: |
+    #!/bin/bash
+    
+    # Wait for Elasticsearch to start
+    until curl -s "http://elasticsearch-es-default.logging.svc.cluster.local:9200" | grep -q "You Know, for Search"; do
+      echo "Waiting for Elasticsearch to start..."
+      sleep 10
+    done
+    
+    # Create ILM policy for log retention (7 days)
+    curl -X PUT "http://elasticsearch-es-default.logging.svc.cluster.local:9200/_ilm/policy/logs-policy" -H 'Content-Type: application/json' -d'
+    {
+      "policy": {
+        "phases": {
+          "hot": {
+            "min_age": "0ms",
+            "actions": {
+              "rollover": {
+                "max_age": "1d",
+                "max_size": "5gb"
+              }
+            }
+          },
+          "delete": {
+            "min_age": "7d",
+            "actions": {
+              "delete": {}
+            }
+          }
+        }
+      }
+    }'
+    
+    echo "ILM policy created successfully"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: elasticsearch-setup
+  namespace: logging
+spec:
+  template:
+    spec:
+      containers:
+      - name: elasticsearch-setup
+        image: curlimages/curl:7.82.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          chmod +x /scripts/create-ilm-policy.sh
+          /scripts/create-ilm-policy.sh
+        volumeMounts:
+        - name: config-volume
+          mountPath: /scripts
+      restartPolicy: OnFailure
+      volumes:
+      - name: config-volume
+        configMap:
+          name: elasticsearch-index-lifecycle
+          defaultMode: 0755
+  backoffLimit: 5

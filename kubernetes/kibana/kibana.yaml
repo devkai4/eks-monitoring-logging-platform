@@ -1,0 +1,82 @@
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: kibana
+  namespace: logging
+spec:
+  version: 8.7.0
+  count: 1
+  elasticsearchRef:
+    name: elasticsearch
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true
+  podTemplate:
+    spec:
+      containers:
+      - name: kibana
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 500m
+          limits:
+            memory: 1Gi
+            cpu: 1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-setup
+  namespace: logging
+data:
+  setup-index-patterns.sh: |
+    #!/bin/bash
+    
+    # Wait for Kibana to be ready
+    until curl -s http://kibana-kb-http.logging.svc.cluster.local:5601/api/status | grep -q '"overall":{"level":"available"'; do
+      echo "Waiting for Kibana to be ready..."
+      sleep 10
+    done
+    
+    # Create index pattern for logs
+    curl -X POST "http://kibana-kb-http.logging.svc.cluster.local:5601/api/saved_objects/index-pattern/logstash" \
+      -H 'kbn-xsrf: true' \
+      -H 'Content-Type: application/json' \
+      -d'{"attributes": {"title": "logstash-*", "timeFieldName": "@timestamp"}}'
+    
+    # Create basic dashboard for logs visualization
+    curl -X POST "http://kibana-kb-http.logging.svc.cluster.local:5601/api/saved_objects/dashboard/kubernetes-logs" \
+      -H 'kbn-xsrf: true' \
+      -H 'Content-Type: application/json' \
+      -d'{"attributes": {"title": "Kubernetes Logs Overview", "description": "Dashboard for Kubernetes logs", "hits": 0, "timeRestore": true, "panelsJSON": "[]"}}'
+    
+    echo "Kibana setup completed successfully"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kibana-setup
+  namespace: logging
+spec:
+  template:
+    spec:
+      containers:
+      - name: kibana-setup
+        image: curlimages/curl:7.82.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          chmod +x /scripts/setup-index-patterns.sh
+          /scripts/setup-index-patterns.sh
+        volumeMounts:
+        - name: config-volume
+          mountPath: /scripts
+      restartPolicy: OnFailure
+      volumes:
+      - name: config-volume
+        configMap:
+          name: kibana-setup
+          defaultMode: 0755
+  backoffLimit: 5

@@ -1,0 +1,185 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-main
+  namespace: monitoring
+stringData:
+  alertmanager.yaml: |
+    global:
+      resolve_timeout: 5m
+      slack_api_url: 'https://hooks.slack.com/services/YOUR_SLACK_WEBHOOK_URL'
+      smtp_smarthost: 'smtp.example.com:587'
+      smtp_from: 'alertmanager@example.com'
+      smtp_auth_username: 'alertmanager'
+      smtp_auth_password: 'password'
+      smtp_require_tls: true
+
+    templates:
+      - '/etc/alertmanager/config/*.tmpl'
+
+    route:
+      group_by: ['namespace', 'alertname', 'job']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: 'slack-notifications'
+      routes:
+      - match:
+          severity: critical
+        receiver: 'pagerduty'
+        continue: true
+        group_wait: 30s
+        repeat_interval: 1h
+      - match:
+          severity: warning
+        receiver: 'slack-notifications'
+        group_wait: 2m
+        repeat_interval: 3h
+      - match:
+          severity: info
+        receiver: 'email-notifications'
+        group_wait: 5m
+        repeat_interval: 12h
+
+    inhibit_rules:
+    - source_match:
+        severity: 'critical'
+      target_match:
+        severity: 'warning'
+      equal: ['alertname', 'namespace', 'pod']
+    - source_match:
+        severity: 'warning'
+      target_match:
+        severity: 'info'
+      equal: ['alertname', 'namespace', 'pod']
+
+    receivers:
+    - name: 'slack-notifications'
+      slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        title: '{{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        title_link: 'https://grafana.example.com/d/monitoring'
+        footer: 'EKS Monitoring Platform'
+        actions:
+        - type: button
+          text: 'Runbook'
+          url: '{{ (index .Alerts 0).Annotations.runbook_url }}'
+        - type: button
+          text: 'Dashboard'
+          url: '{{ (index .Alerts 0).Annotations.dashboard_url }}'
+
+    - name: 'email-notifications'
+      email_configs:
+      - to: 'team@example.com'
+        send_resolved: true
+        html: '{{ template "email.html" . }}'
+        headers:
+          subject: '{{ template "email.subject" . }}'
+
+    - name: 'pagerduty'
+      pagerduty_configs:
+      - service_key: YOUR_PAGERDUTY_SERVICE_KEY
+        send_resolved: true
+        description: '{{ template "pagerduty.description" . }}'
+        details:
+          firing: '{{ template "pagerduty.firing" . }}'
+          num_firing: '{{ .Alerts.Firing | len }}'
+          resolved: '{{ template "pagerduty.resolved" . }}'
+          num_resolved: '{{ .Alerts.Resolved | len }}'
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-templates
+  namespace: monitoring
+data:
+  slack.tmpl: |
+    {{ define "slack.title" }}
+    [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+    {{ end }}
+
+    {{ define "slack.text" }}
+    {{ range .Alerts }}
+    *Alert:* {{ .Annotations.summary }}
+    *Description:* {{ .Annotations.description }}
+    *Severity:* {{ .Labels.severity }}
+    *Started:* {{ .StartsAt | since }}
+    {{ if .Labels.pod }}*Pod:* {{ .Labels.pod }}{{ end }}
+    {{ if .Labels.instance }}*Instance:* {{ .Labels.instance }}{{ end }}
+    {{ if .Labels.namespace }}*Namespace:* {{ .Labels.namespace }}{{ end }}
+    *Prometheus:* {{ .GeneratorURL }}
+    {{ end }}
+    {{ end }}
+
+  email.tmpl: |
+    {{ define "email.subject" }}
+    [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+    {{ end }}
+
+    {{ define "email.html" }}
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: Arial, sans-serif; }
+        .alert { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; }
+        .critical { background-color: #f2dede; border-color: #ebccd1; color: #a94442; }
+        .warning { background-color: #fcf8e3; border-color: #faebcc; color: #8a6d3b; }
+        .info { background-color: #d9edf7; border-color: #bce8f1; color: #31708f; }
+        .details { margin-left: 15px; }
+      </style>
+    </head>
+    <body>
+      <h2>Alert Summary</h2>
+      <p>{{ .Alerts.Firing | len }} firing alerts, {{ .Alerts.Resolved | len }} resolved alerts</p>
+      {{ range .Alerts }}
+      <div class="alert {{ .Labels.severity }}">
+        <h3>{{ .Annotations.summary }}</h3>
+        <p>{{ .Annotations.description }}</p>
+        <div class="details">
+          <p><strong>Severity:</strong> {{ .Labels.severity }}</p>
+          <p><strong>Started:</strong> {{ .StartsAt }}</p>
+          {{ if .Labels.pod }}<p><strong>Pod:</strong> {{ .Labels.pod }}</p>{{ end }}
+          {{ if .Labels.instance }}<p><strong>Instance:</strong> {{ .Labels.instance }}</p>{{ end }}
+          {{ if .Labels.namespace }}<p><strong>Namespace:</strong> {{ .Labels.namespace }}</p>{{ end }}
+          <p><a href="{{ .GeneratorURL }}">View in Prometheus</a></p>
+        </div>
+      </div>
+      {{ end }}
+    </body>
+    </html>
+    {{ end }}
+
+  pagerduty.tmpl: |
+    {{ define "pagerduty.description" }}
+    [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}: {{ .CommonAnnotations.summary }}
+    {{ end }}
+
+    {{ define "pagerduty.firing" }}
+    {{ range .Alerts }}
+    Alert: {{ .Annotations.summary }}
+    Description: {{ .Annotations.description }}
+    Severity: {{ .Labels.severity }}
+    Started: {{ .StartsAt }}
+    {{ if .Labels.pod }}Pod: {{ .Labels.pod }}{{ end }}
+    {{ if .Labels.instance }}Instance: {{ .Labels.instance }}{{ end }}
+    {{ if .Labels.namespace }}Namespace: {{ .Labels.namespace }}{{ end }}
+
+    {{ end }}
+    {{ end }}
+
+    {{ define "pagerduty.resolved" }}
+    {{ range .Alerts }}
+    Alert: {{ .Annotations.summary }}
+    Description: {{ .Annotations.description }}
+    Severity: {{ .Labels.severity }}
+    Started: {{ .StartsAt }}
+    Resolved: {{ .EndsAt }}
+    {{ if .Labels.pod }}Pod: {{ .Labels.pod }}{{ end }}
+    {{ if .Labels.instance }}Instance: {{ .Labels.instance }}{{ end }}
+    {{ if .Labels.namespace }}Namespace: {{ .Labels.namespace }}{{ end }}
+
+    {{ end }}
+    {{ end }}
