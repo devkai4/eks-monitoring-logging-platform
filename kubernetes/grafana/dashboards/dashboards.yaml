@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-config
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  dashboards.yaml: |-
+    apiVersion: 1
+    providers:
+    - name: 'eks-monitoring-platform'
+      orgId: 1
+      folder: 'EKS Monitoring Platform'
+      type: file
+      disableDeletion: false
+      editable: true
+      options:
+        path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-cluster-overview
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  cluster-overview.json: |-
+    {{DASHBOARD_CLUSTER_OVERVIEW}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-node-details
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  node-details.json: |-
+    {{DASHBOARD_NODE_DETAILS}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-application-performance
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  application-performance.json: |-
+    {{DASHBOARD_APPLICATION_PERFORMANCE}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-service-sla
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  service-sla.json: |-
+    {{DASHBOARD_SERVICE_SLA}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-resource-planning
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  resource-planning.json: |-
+    {{DASHBOARD_RESOURCE_PLANNING}}

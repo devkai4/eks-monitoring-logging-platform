@@ -70,11 +70,13 @@ helm upgrade --install fluent-bit fluent/fluent-bit \
   -f kubernetes/fluentbit/values.yaml \
   --namespace logging
 
+# Deploy dashboards
+echo -e "${YELLOW}Deploying Grafana dashboards...${NC}"
+./scripts/deploy-dashboards.sh
+
 # Deploy sample application
 echo -e "${YELLOW}Deploying sample application...${NC}"
-kubectl apply -f kubernetes/sample-app/deployment.yaml
-kubectl apply -f kubernetes/sample-app/service.yaml
-kubectl apply -f kubernetes/sample-app/servicemonitor.yaml
+./scripts/deploy-sample-app.sh
 
 # Wait for deployments to be ready
 echo -e "${YELLOW}Waiting for deployments to be ready...${NC}"

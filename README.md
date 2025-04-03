@@ -124,7 +124,12 @@ The platform is designed to be customizable:
 ### Monitoring
 
 - **Real-time metrics collection** from Kubernetes nodes, pods, and applications
-- **Pre-configured dashboards** for cluster, node, and pod monitoring
+- **Pre-configured dashboards** for cluster, node, and pod monitoring including:
+  - Cluster Overview Dashboard
+  - Node Details Dashboard
+  - Application Performance Dashboard
+  - Service SLA Dashboard
+  - Resource Planning Dashboard
 - **Alerting system** for critical issues and performance anomalies
 - **ServiceMonitor** support for automatic discovery of custom metrics endpoints
 - **Persistent storage** for long-term metric retention
