@@ -1,0 +1,202 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app: api
+    component: sample-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+      component: sample-app
+  template:
+    metadata:
+      labels:
+        app: api
+        component: sample-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api
+        image: python:3.9-slim
+        command: 
+        - "sh"
+        - "-c"
+        - |
+          pip install flask prometheus_client requests && \
+          cat > app.py << 'EOF'
+          import time
+          import random
+          import threading
+          from flask import Flask, jsonify, request
+          import requests
+          from prometheus_client import make_wsgi_app, Counter, Histogram, Gauge, Info
+          from werkzeug.middleware.dispatcher import DispatcherMiddleware
+          
+          app = Flask(__name__)
+          
+          # Add prometheus wsgi middleware to route /metrics requests
+          app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {
+              '/metrics': make_wsgi_app()
+          })
+          
+          # Define metrics
+          REQUEST_COUNT = Counter('api_request_count', 'Total request count', ['method', 'endpoint', 'status'])
+          REQUEST_LATENCY = Histogram('api_request_latency_seconds', 'Request latency', ['method', 'endpoint'])
+          DB_QUERY_COUNT = Counter('api_db_query_count', 'Database query count', ['query_type'])
+          ACTIVE_REQUESTS = Gauge('api_active_requests', 'Number of active requests')
+          ERROR_COUNT = Counter('api_error_count', 'Number of errors', ['error_type'])
+          SERVICE_INFO = Info('api_service_info', 'API service information')
+          
+          # Set service info
+          SERVICE_INFO.info({'version': '1.0.0', 'name': 'sample-api'})
+          
+          # Simulated database for demo
+          items = [
+              {"id": 1, "name": "Item 1", "price": 10.99},
+              {"id": 2, "name": "Item 2", "price": 24.99},
+              {"id": 3, "name": "Item 3", "price": 5.99}
+          ]
+          
+          @app.route('/health')
+          def health():
+              return 'ok'
+          
+          @app.route('/api/items', methods=['GET'])
+          def get_items():
+              ACTIVE_REQUESTS.inc()
+              start_time = time.time()
+              
+              try:
+                  # Simulate DB latency
+                  time.sleep(random.uniform(0.05, 0.2))
+                  DB_QUERY_COUNT.labels(query_type='select').inc()
+                  
+                  # Occasionally produce an error
+                  if random.random() < 0.05:
+                      ERROR_COUNT.labels(error_type='db_connection').inc()
+                      response = jsonify({"error": "Database connection error"}), 500
+                  else:
+                      response = jsonify(items), 200
+                      
+                  REQUEST_COUNT.labels(
+                      method=request.method, 
+                      endpoint='/api/items', 
+                      status=response[1]
+                  ).inc()
+                  
+                  return response
+              finally:
+                  REQUEST_LATENCY.labels(
+                      method=request.method, 
+                      endpoint='/api/items'
+                  ).observe(time.time() - start_time)
+                  ACTIVE_REQUESTS.dec()
+          
+          @app.route('/api/items/<int:item_id>', methods=['GET'])
+          def get_item(item_id):
+              ACTIVE_REQUESTS.inc()
+              start_time = time.time()
+              
+              try:
+                  time.sleep(random.uniform(0.05, 0.1))
+                  DB_QUERY_COUNT.labels(query_type='select').inc()
+                  
+                  for item in items:
+                      if item['id'] == item_id:
+                          # Simulate database fetch
+                          try:
+                              # Contact database service
+                              db_response = requests.get(f'http://database:5000/query/{item_id}', timeout=1)
+                              if db_response.status_code == 200:
+                                  data = {"result": "success", "item": item}
+                              else:
+                                  data = {"result": "warning", "item": item}
+                          except:
+                              ERROR_COUNT.labels(error_type='db_connection').inc()
+                              data = {"result": "error", "item": item}
+                          
+                          response = jsonify(data), 200
+                          REQUEST_COUNT.labels(
+                              method=request.method, 
+                              endpoint='/api/items/<id>', 
+                              status=200
+                          ).inc()
+                          return response
+                  
+                  response = jsonify({"error": "Item not found"}), 404
+                  REQUEST_COUNT.labels(
+                      method=request.method, 
+                      endpoint='/api/items/<id>', 
+                      status=404
+                  ).inc()
+                  return response
+              finally:
+                  REQUEST_LATENCY.labels(
+                      method=request.method, 
+                      endpoint='/api/items/<id>'
+                  ).observe(time.time() - start_time)
+                  ACTIVE_REQUESTS.dec()
+          
+          @app.route('/load/<int:intensity>', methods=['GET'])
+          def generate_load(intensity):
+              """Generate artificial load for demo purposes"""
+              duration = min(intensity, 30)  # Cap at 30 seconds
+              threads = min(intensity, 10)   # Cap at 10 threads
+              
+              def make_requests():
+                  end_time = time.time() + duration
+                  while time.time() < end_time:
+                      try:
+                          requests.get('http://localhost:8000/api/items')
+                          time.sleep(0.1)
+                          item_id = random.randint(1, 5)  # Includes non-existent IDs
+                          requests.get(f'http://localhost:8000/api/items/{item_id}')
+                          time.sleep(0.1)
+                      except:
+                          pass
+              
+              for _ in range(threads):
+                  thread = threading.Thread(target=make_requests)
+                  thread.daemon = True
+                  thread.start()
+              
+              return jsonify({
+                  "message": f"Load generation started with {threads} threads for {duration} seconds",
+                  "intensity": intensity
+              })
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=8000)
+          EOF
+          python app.py
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: DATABASE_URL
+          value: "http://database:5000"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 20

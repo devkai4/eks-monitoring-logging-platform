@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-app-config
+  namespace: sample-app
+data:
+  README.md: |
+    # Sample Microservices Application
+    
+    This is a demo application consisting of three microservices:
+    
+    1. Frontend - NGINX with a metrics exporter
+    2. API - Python Flask application with Prometheus metrics
+    3. Database - Simulated database with Prometheus metrics
+    
+    ## Features
+    
+    - Custom metrics with Prometheus exporters
+    - Business metrics and KPIs
+    - Structured logging
+    - Load generation endpoints for demos
+    
+    ## Endpoints
+    
+    ### Frontend
+    - `/` - Main application
+    - `/metrics` - Prometheus metrics
+    - `/health` - Health check
+    
+    ### API
+    - `/api/items` - List all items
+    - `/api/items/<id>` - Get specific item
+    - `/metrics` - Prometheus metrics
+    - `/health` - Health check
+    - `/load/<intensity>` - Generate load (1-10 scale)
+    
+    ### Database
+    - `/query/<id>` - Query database for item
+    - `/metrics` - Prometheus metrics
+    - `/health` - Health check
+    - `/load/<intensity>` - Generate database load (1-10 scale)
+    
+    ## Example URLs
+    
+    ```
+    # Forward the frontend port
+    kubectl -n sample-app port-forward svc/frontend 8080:80
+    
+    # Access the application
+    http://localhost:8080/
+    
+    # Generate load
+    http://localhost:8080/api/load/5
+    ```

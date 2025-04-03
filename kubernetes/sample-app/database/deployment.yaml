@@ -1,0 +1,186 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: database
+  labels:
+    app: database
+    component: sample-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: database
+      component: sample-app
+  template:
+    metadata:
+      labels:
+        app: database
+        component: sample-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: database
+        image: python:3.9-slim
+        command: 
+        - "sh"
+        - "-c"
+        - |
+          pip install flask prometheus_client && \
+          cat > app.py << 'EOF'
+          import time
+          import random
+          import threading
+          from flask import Flask, jsonify, request
+          from prometheus_client import make_wsgi_app, Counter, Histogram, Gauge, Info, Summary
+          from werkzeug.middleware.dispatcher import DispatcherMiddleware
+          
+          app = Flask(__name__)
+          
+          # Add prometheus wsgi middleware to route /metrics requests
+          app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {
+              '/metrics': make_wsgi_app()
+          })
+          
+          # Define metrics
+          QUERY_COUNT = Counter('db_query_count', 'Database query count', ['query_type', 'status'])
+          QUERY_LATENCY = Histogram(
+              'db_query_latency_seconds', 
+              'Database query latency in seconds',
+              ['query_type'],
+              buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5]
+          )
+          CONNECTION_COUNT = Gauge('db_connection_count', 'Active database connections')
+          DB_SIZE = Gauge('db_size_bytes', 'Database size in bytes')
+          RECORD_COUNT = Gauge('db_record_count', 'Number of records in database', ['table'])
+          ERROR_COUNT = Counter('db_error_count', 'Number of database errors', ['error_type'])
+          CONNECTION_POOL = Gauge('db_connection_pool', 'Database connection pool size', ['state'])
+          SERVICE_INFO = Info('db_service_info', 'Database service information')
+          QUERY_SIZE_SUMMARY = Summary('db_query_size_bytes', 'Query size in bytes')
+          
+          # Set initial metrics
+          SERVICE_INFO.info({'version': '1.0.0', 'name': 'sample-database', 'type': 'sqlite-memory'})
+          DB_SIZE.set(1024 * 1024 * 10)  # Simulate 10MB database
+          RECORD_COUNT.labels(table='items').set(100)
+          RECORD_COUNT.labels(table='users').set(25)
+          CONNECTION_POOL.labels(state='used').set(3)
+          CONNECTION_POOL.labels(state='idle').set(7)
+          CONNECTION_POOL.labels(state='max').set(20)
+          
+          # Simulated database for demo
+          database = {
+              1: {"id": 1, "name": "Item 1", "stock": 50, "category": "electronics"},
+              2: {"id": 2, "name": "Item 2", "stock": 20, "category": "books"},
+              3: {"id": 3, "name": "Item 3", "stock": 35, "category": "clothing"}
+          }
+          
+          @app.route('/health')
+          def health():
+              return 'ok'
+          
+          @app.route('/query/<int:item_id>')
+          def query_item(item_id):
+              query_type = 'select'
+              start_time = time.time()
+              CONNECTION_COUNT.inc()
+              
+              try:
+                  # Simulate database latency with occasional high latency
+                  if random.random() < 0.1:
+                      # Simulate slow query (index miss, etc.)
+                      time.sleep(random.uniform(0.5, 1.0))
+                  else:
+                      time.sleep(random.uniform(0.01, 0.1))
+                      
+                  query_size = random.randint(100, 1000)
+                  QUERY_SIZE_SUMMARY.observe(query_size)
+                  
+                  # Simulate occasional errors
+                  if random.random() < 0.05:
+                      ERROR_COUNT.labels(error_type='timeout').inc()
+                      QUERY_COUNT.labels(query_type=query_type, status='error').inc()
+                      response = jsonify({"error": "Database timeout"}), 500
+                  elif item_id in database:
+                      QUERY_COUNT.labels(query_type=query_type, status='success').inc()
+                      response = jsonify({
+                          "data": database[item_id],
+                          "query_time_ms": (time.time() - start_time) * 1000
+                      }), 200
+                  else:
+                      QUERY_COUNT.labels(query_type=query_type, status='not_found').inc()
+                      response = jsonify({"error": "Record not found"}), 404
+                      
+                  return response
+              finally:
+                  query_duration = time.time() - start_time
+                  QUERY_LATENCY.labels(query_type=query_type).observe(query_duration)
+                  CONNECTION_COUNT.dec()
+          
+          @app.route('/load/<int:intensity>', methods=['GET'])
+          def generate_load(intensity):
+              """Generate artificial database load for demo purposes"""
+              duration = min(intensity, 30)  # Cap at 30 seconds
+              query_rate = min(intensity * 5, 100)  # Queries per second
+              
+              def simulate_load():
+                  end_time = time.time() + duration
+                  while time.time() < end_time:
+                      # Simulate different query patterns
+                      query_type = random.choice(['select', 'insert', 'update', 'delete'])
+                      status = random.choice(['success', 'success', 'success', 'error'])
+                      
+                      # Update metrics
+                      QUERY_COUNT.labels(query_type=query_type, status=status).inc()
+                      QUERY_LATENCY.labels(query_type=query_type).observe(random.uniform(0.01, 0.5))
+                      
+                      # Simulate connection pool changes
+                      used = random.randint(3, 15)
+                      CONNECTION_POOL.labels(state='used').set(used)
+                      CONNECTION_POOL.labels(state='idle').set(20 - used)
+                      
+                      # Occasionally generate errors
+                      if random.random() < 0.1:
+                          error_type = random.choice(['timeout', 'deadlock', 'connection', 'constraint'])
+                          ERROR_COUNT.labels(error_type=error_type).inc()
+                      
+                      # Sleep to control rate
+                      time.sleep(1.0 / query_rate)
+              
+              thread = threading.Thread(target=simulate_load)
+              thread.daemon = True
+              thread.start()
+              
+              return jsonify({
+                  "message": f"Database load simulation started for {duration} seconds",
+                  "intensity": intensity,
+                  "query_rate": query_rate
+              })
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000)
+          EOF
+          python app.py
+        ports:
+        - containerPort: 5000
+          name: http
+        resources:
+          requests:
+            cpu: 150m
+            memory: 192Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 20
+          periodSeconds: 20

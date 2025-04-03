@@ -102,10 +102,8 @@ helm upgrade --install fluent-bit fluent/fluent-bit \
   -f kubernetes/fluentbit/values.yaml \
   --namespace logging
 
-# Deploy Sample Application
-kubectl apply -f kubernetes/sample-app/deployment.yaml
-kubectl apply -f kubernetes/sample-app/service.yaml
-kubectl apply -f kubernetes/sample-app/servicemonitor.yaml
+# Deploy Sample Microservices Application
+./scripts/deploy-sample-app.sh
 ```
 
 ## Customization
@@ -130,6 +128,7 @@ The platform is designed to be customizable:
 - **Alerting system** for critical issues and performance anomalies
 - **ServiceMonitor** support for automatic discovery of custom metrics endpoints
 - **Persistent storage** for long-term metric retention
+- **Sample microservices** with custom metrics exporters for demonstrations
 
 ### Logging
 
