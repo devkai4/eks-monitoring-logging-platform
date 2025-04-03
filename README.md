@@ -134,6 +134,11 @@ The platform is designed to be customizable:
 - **ServiceMonitor** support for automatic discovery of custom metrics endpoints
 - **Persistent storage** for long-term metric retention
 - **Sample microservices** with custom metrics exporters for demonstrations
+- **Integration and automation** features including:
+  - Metrics and logging integration
+  - Backup and restore capabilities
+  - Operational health checks
+  - Consolidated management scripts
 
 ### Logging
 
@@ -194,6 +199,8 @@ A comprehensive troubleshooting guide is available at [docs/troubleshooting.md](
 
 - [Architecture Documentation](docs/architecture.md): Detailed system design
 - [Troubleshooting Guide](docs/troubleshooting.md): Solutions for common issues
+- [Integration and Automation](docs/integration-and-automation.md): Features for managing the platform
+- [Sample Application](docs/sample-app.md): Description of the demo microservices
 
 ## Future Enhancements
 
