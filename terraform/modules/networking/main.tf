@@ -108,3 +108,61 @@ resource "aws_nat_gateway" "this" {
 
   depends_on = [aws_internet_gateway.this]
 }
+
+# Public Route Table
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+
+  tags = merge(
+    local.tags,
+    {
+      Name = "${local.name}-rt-public"
+    }
+  )
+}
+
+# Public Route
+resource "aws_route" "public_internet_gateway" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.this.id
+}
+
+# Route Table association with Public Subnets
+resource "aws_route_table_association" "public" {
+  count = length(var.public_subnets)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+# Private Route Tables
+resource "aws_route_table" "private" {
+  count = var.single_nat_gateway ? 1 : length(var.azs)
+
+  vpc_id = aws_vpc.this.id
+
+  tags = merge(
+    local.tags,
+    {
+      Name = "${local.name}-rt-private-${count.index + 1}"
+    }
+  )
+}
+
+# Private Routes (through NAT Gateway)
+resource "aws_route" "private_nat_gateway" {
+  count = var.enable_nat_gateway ? (var.single_nat_gateway ? 1 : length(var.azs)) : 0
+
+  route_table_id         = aws_route_table.private[count.index].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.this[count.index].id
+}
+
+# Route Table association with Private Subnets
+resource "aws_route_table_association" "private" {
+  count = length(var.private_subnets)
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[var.single_nat_gateway ? 0 : count.index].id
+}
