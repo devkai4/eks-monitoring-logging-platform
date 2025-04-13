@@ -4,7 +4,7 @@ provider "aws" {
 
 locals {
   name = "${var.project_name}-${var.environment}"
-
+  
   tags = merge(
     var.tags,
     {
@@ -43,7 +43,7 @@ resource "aws_internet_gateway" "this" {
 
 # Elastic IP for NAT Gateway
 resource "aws_eip" "nat" {
-  count  = var.enable_nat_gateway ? (var.single_nat_gateway ? 1 : length(var.azs)) : 0
+  count = var.enable_nat_gateway ? (var.single_nat_gateway ? 1 : length(var.azs)) : 0
   domain = "vpc"
 
   tags = merge(
@@ -66,9 +66,9 @@ resource "aws_subnet" "public" {
   tags = merge(
     local.tags,
     {
-      Name                                          = "${local.name}-public-${var.azs[count.index]}"
-      "kubernetes.io/role/elb"                      = 1
-      "kubernetes.io/cluster/${local.name}-cluster" = "shared"
+      Name                                           = "${local.name}-public-${var.azs[count.index]}"
+      "kubernetes.io/role/elb"                       = 1
+      "kubernetes.io/cluster/${local.name}-cluster"  = "shared"
     }
   )
 }
@@ -85,9 +85,9 @@ resource "aws_subnet" "private" {
   tags = merge(
     local.tags,
     {
-      Name                                          = "${local.name}-private-${var.azs[count.index]}"
-      "kubernetes.io/role/internal-elb"             = 1
-      "kubernetes.io/cluster/${local.name}-cluster" = "shared"
+      Name                                           = "${local.name}-private-${var.azs[count.index]}"
+      "kubernetes.io/role/internal-elb"              = 1
+      "kubernetes.io/cluster/${local.name}-cluster"  = "shared"
     }
   )
 }
@@ -165,4 +165,19 @@ resource "aws_route_table_association" "private" {
 
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[var.single_nat_gateway ? 0 : count.index].id
+}
+
+# VPC Endpoint for S3 (Gateway)
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id       = aws_vpc.this.id
+  service_name = "com.amazonaws.${var.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids = concat([aws_route_table.public.id], aws_route_table.private[*].id)
+
+  tags = merge(
+    local.tags,
+    {
+      Name = "${local.name}-s3-endpoint"
+    }
+  )
 }
