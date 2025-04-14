@@ -181,3 +181,83 @@ resource "aws_vpc_endpoint" "s3" {
     }
   )
 }
+
+# Security Group for EKS Cluster
+resource "aws_security_group" "eks_cluster" {
+  name        = "${local.name}-eks-cluster-sg"
+  description = "Security group for EKS cluster"
+  vpc_id      = aws_vpc.this.id
+
+  tags = merge(
+    local.tags,
+    {
+      Name = "${local.name}-eks-cluster-sg"
+    }
+  )
+}
+
+# Security Group for EKS Node Group
+resource "aws_security_group" "eks_nodes" {
+  name        = "${local.name}-eks-nodes-sg"
+  description = "Security group for EKS nodes"
+  vpc_id      = aws_vpc.this.id
+
+  tags = merge(
+    local.tags,
+    {
+      Name = "${local.name}-eks-nodes-sg"
+    }
+  )
+}
+
+# Security Group Rules for EKS Cluster
+resource "aws_security_group_rule" "cluster_inbound" {
+  description              = "Allow worker nodes to communicate with the cluster API Server"
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.eks_cluster.id
+  source_security_group_id = aws_security_group.eks_nodes.id
+}
+
+resource "aws_security_group_rule" "cluster_outbound" {
+  description              = "Allow cluster API Server to communicate with the worker nodes"
+  type                     = "egress"
+  from_port                = 0
+  to_port                  = 0
+  protocol                 = "-1"
+  security_group_id        = aws_security_group.eks_cluster.id
+  cidr_blocks              = ["0.0.0.0/0"]
+}
+
+# Security Group Rules for EKS Node Group
+resource "aws_security_group_rule" "nodes_inbound" {
+  description              = "Allow nodes to communicate with each other"
+  type                     = "ingress"
+  from_port                = 0
+  to_port                  = 65535
+  protocol                 = "-1"
+  security_group_id        = aws_security_group.eks_nodes.id
+  source_security_group_id = aws_security_group.eks_nodes.id
+}
+
+resource "aws_security_group_rule" "nodes_cluster_inbound" {
+  description              = "Allow worker nodes to receive communication from the cluster control plane"
+  type                     = "ingress"
+  from_port                = 1025
+  to_port                  = 65535
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.eks_nodes.id
+  source_security_group_id = aws_security_group.eks_cluster.id
+}
+
+resource "aws_security_group_rule" "nodes_outbound" {
+  description = "Allow all outbound traffic"
+  type        = "egress"
+  from_port   = 0
+  to_port     = 0
+  protocol    = "-1"
+  cidr_blocks = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.eks_nodes.id
+}
